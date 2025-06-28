@@ -23,7 +23,7 @@ export class SubscriberService {
     const { userId, channelId, keywordFilters } = request;
 
     // 檢查是否已有訂閱
-    const existingConfig = this.databaseService.getSubscriber(userId);
+    const existingConfig = await this.databaseService.getSubscriber(userId);
     const shouldMerge = !!existingConfig;
 
     let finalKeywordFilters = keywordFilters;
@@ -61,7 +61,7 @@ export class SubscriberService {
   }
 
   async unsubscribe(userId: string): Promise<boolean> {
-    const existingConfig = this.databaseService.getSubscriber(userId);
+    const existingConfig = await this.databaseService.getSubscriber(userId);
 
     if (!existingConfig) {
       this.logger.warn(`Attempted to unsubscribe non-existent user: ${userId}`);
@@ -73,29 +73,192 @@ export class SubscriberService {
     return true;
   }
 
-  async reset(userId: string): Promise<boolean> {
-    const existingConfig = this.databaseService.getSubscriber(userId);
+  async partialUnsubscribe(
+    userId: string,
+    keywords: string[],
+    messageTypes: string[],
+  ): Promise<{
+    success: boolean;
+    remainingCount: number;
+    removedItems: string[];
+    remainingFilters: KeywordFilter[];
+  }> {
+    const existingConfig = await this.databaseService.getSubscriber(userId);
 
     if (!existingConfig) {
-      this.logger.warn(`Attempted to reset non-existent user: ${userId}`);
-      return false;
+      this.logger.warn(
+        `Attempted to unsubscribe from non-existent user: ${userId}`,
+      );
+      return {
+        success: false,
+        remainingCount: 0,
+        removedItems: [],
+        remainingFilters: [],
+      };
     }
 
-    await this.databaseService.resetSubscriber(userId);
-    this.logger.log(`Reset subscription for user: ${userId}`);
-    return true;
+    if (
+      !existingConfig.keywordFilters ||
+      existingConfig.keywordFilters.length === 0
+    ) {
+      this.logger.warn(`User ${userId} has no subscriptions to remove`);
+      return {
+        success: false,
+        remainingCount: 0,
+        removedItems: [],
+        remainingFilters: [],
+      };
+    }
+
+    let updatedFilters = [...existingConfig.keywordFilters];
+    let hasChanges = false;
+    const removedItems: string[] = [];
+
+    // 如果指定了關鍵字，只處理這些關鍵字
+    if (keywords.length > 0) {
+      const keywordsLower = keywords.map((k) => k.toLowerCase());
+
+      updatedFilters = updatedFilters
+        .map((filter) => {
+          if (keywordsLower.includes(filter.keyword.toLowerCase())) {
+            // 如果沒有指定訊息類型，完全移除該關鍵字
+            if (messageTypes.length === 0) {
+              hasChanges = true;
+              removedItems.push(`${filter.keyword} (全部)`);
+              return null;
+            }
+
+            // 移除指定的訊息類型
+            const remainingTypes = filter.messageTypes.filter(
+              (type) => !messageTypes.includes(type),
+            );
+
+            const removedTypes = filter.messageTypes.filter((type) =>
+              messageTypes.includes(type),
+            );
+
+            if (remainingTypes.length === 0) {
+              // 如果沒有剩餘類型，標記為刪除
+              hasChanges = true;
+              removedItems.push(`${filter.keyword} (全部)`);
+              return null;
+            } else if (remainingTypes.length !== filter.messageTypes.length) {
+              // 部分移除訊息類型
+              hasChanges = true;
+              const removedTypeNames = removedTypes.map((t) =>
+                t === 'buy' ? '收購' : '販售',
+              );
+              removedItems.push(
+                `${filter.keyword} (${removedTypeNames.join(', ')})`,
+              );
+              this.logger.log(
+                `Partial removal for keyword "${filter.keyword}": [${filter.messageTypes.join(', ')}] -> [${remainingTypes.join(', ')}]`,
+              );
+              return {
+                keyword: filter.keyword, // 確保 keyword 被正確複製
+                messageTypes: remainingTypes,
+              };
+            }
+          }
+          return filter;
+        })
+        .filter((filter) => filter !== null);
+    } else {
+      // 沒有指定關鍵字，必須指定訊息類型才有意義
+      if (messageTypes.length === 0) {
+        this.logger.warn(
+          `User ${userId} tried to unsubscribe without specifying keywords or message types`,
+        );
+        return {
+          success: false,
+          remainingCount: existingConfig.keywordFilters.length,
+          removedItems: [],
+          remainingFilters: existingConfig.keywordFilters,
+        };
+      }
+
+      // 處理所有關鍵字的指定訊息類型
+      updatedFilters = updatedFilters
+        .map((filter) => {
+          const remainingTypes = filter.messageTypes.filter(
+            (type) => !messageTypes.includes(type),
+          );
+
+          const removedTypes = filter.messageTypes.filter((type) =>
+            messageTypes.includes(type),
+          );
+
+          if (remainingTypes.length === 0) {
+            hasChanges = true;
+            removedItems.push(`${filter.keyword} (全部)`);
+            return null;
+          } else if (remainingTypes.length !== filter.messageTypes.length) {
+            hasChanges = true;
+            const removedTypeNames = removedTypes.map((t) =>
+              t === 'buy' ? '收購' : '販售',
+            );
+            removedItems.push(
+              `${filter.keyword} (${removedTypeNames.join(', ')})`,
+            );
+            return { keyword: filter.keyword, messageTypes: remainingTypes };
+          }
+          return filter;
+        })
+        .filter((filter) => filter !== null);
+    }
+
+    if (!hasChanges) {
+      this.logger.warn(`No matching subscriptions found for user ${userId}`);
+      return {
+        success: false,
+        remainingCount: existingConfig.keywordFilters.length,
+        removedItems: [],
+        remainingFilters: existingConfig.keywordFilters,
+      };
+    }
+
+    // 如果沒有剩餘的過濾器，完全移除訂閱
+    if (updatedFilters.length === 0) {
+      await this.databaseService.removeSubscriber(userId);
+      this.logger.log(`Completely unsubscribed user: ${userId}`);
+      return {
+        success: true,
+        remainingCount: 0,
+        removedItems,
+        remainingFilters: [],
+      };
+    }
+
+    // 更新訂閱設定
+    await this.databaseService.saveSubscriberWithFilters(
+      userId,
+      existingConfig.channelId,
+      updatedFilters,
+      false, // 不是合併，是替換
+    );
+
+    this.logger.log(
+      `Partially unsubscribed user ${userId}. ${updatedFilters.length} filters remaining`,
+    );
+    return {
+      success: true,
+      remainingCount: updatedFilters.length,
+      removedItems,
+      remainingFilters: updatedFilters,
+    };
   }
 
-  getSubscription(userId: string): SubscriberConfig | null {
-    return this.databaseService.getSubscriber(userId) || null;
+  async getSubscription(userId: string): Promise<SubscriberConfig | null> {
+    return await this.databaseService.getSubscriber(userId);
   }
 
-  isSubscribed(userId: string): boolean {
-    return !!this.databaseService.getSubscriber(userId);
+  async isSubscribed(userId: string): Promise<boolean> {
+    const subscription = await this.databaseService.getSubscriber(userId);
+    return !!subscription;
   }
 
-  getAllSubscriptions(): Map<string, SubscriberConfig> {
-    return this.databaseService.getSubscribers();
+  async getAllSubscriptions(): Promise<Map<string, SubscriberConfig>> {
+    return await this.databaseService.getAllSubscribers();
   }
 
   private mergeKeywordFilters(

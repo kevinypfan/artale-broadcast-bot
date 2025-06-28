@@ -15,11 +15,34 @@ MapleStory Artale 廣播訊息 Discord 機器人，使用 NestJS 架構重構版
 ## 支援的指令
 
 - `/subscribe` - 訂閱廣播訊息（合併模式）
-- `/unsubscribe` - 取消訂閱
+- `/unsubscribe` - 取消訂閱（支援部分取消）
 - `/status` - 查看訂閱狀態
-- `/reset` - 重置所有訂閱設定
-- `/listkeywords` - 查看關鍵字清單
-- `/listtypes` - 查看訊息類型清單
+
+### 指令使用詳情
+
+#### `/subscribe` - 訂閱廣播訊息
+```
+/subscribe keywords:劍,盾,藥水 types:收購
+/subscribe keywords:武器 types:全部
+/subscribe types:販售  # 訂閱所有販售訊息
+/subscribe              # 訂閱所有訊息
+```
+
+#### `/unsubscribe` - 智能取消訂閱
+```
+/unsubscribe                        # 取消所有訂閱
+/unsubscribe keywords:手攻          # 完全取消「手攻」關鍵字
+/unsubscribe types:收購             # 取消所有關鍵字的收購類型
+/unsubscribe keywords:手攻 types:收購 # 只取消「手攻」的收購訂閱
+```
+- **只指定關鍵字**：完全移除該關鍵字的所有訊息類型
+- **只指定類型**：從所有關鍵字中移除該訊息類型
+- **同時指定**：精確移除特定關鍵字的特定類型
+- 關鍵字匹配不區分大小寫
+- 移除最後一個訂閱會完全取消訂閱
+
+#### `/status` - 查看訂閱狀態
+顯示完整的訂閱資訊，包括所有關鍵字和對應的訊息類型
 
 ## 技術架構
 
@@ -140,10 +163,11 @@ npm run test:cov
 相比舊版本，新版本具有以下改進：
 
 1. **合併訂閱模式**: `/subscribe` 不再覆蓋現有設定，而是合併新的關鍵字和類型
-2. **簡化指令**: 移除 `addkeyword`, `addtype`, `removetype` 等複雜指令
-3. **重置功能**: 新增 `/reset` 指令用於完全重置設定
-4. **MongoDB**: 從 SQLite 遷移到 MongoDB，提供更好的擴展性
-5. **NestJS 架構**: 模組化設計，更易維護和擴展
+2. **智能取消訂閱**: `/unsubscribe` 支援參數化部分取消，可精確控制要取消的內容
+3. **簡化指令集**: 僅保留 3 個核心指令，移除冗餘功能
+4. **統一參數設計**: `/subscribe` 和 `/unsubscribe` 使用相同的參數結構
+5. **MongoDB**: 從 SQLite 遷移到 MongoDB，提供更好的擴展性
+6. **NestJS 架構**: 模組化設計，更易維護和擴展
 
 ### 模組結構
 

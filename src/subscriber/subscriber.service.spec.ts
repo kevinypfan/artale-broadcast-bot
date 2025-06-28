@@ -11,9 +11,8 @@ describe('SubscriberService', () => {
   beforeEach(async () => {
     const mockDatabase = {
       getSubscriber: jest.fn(),
-      saveSubscriberWithFilters: jest.fn().mockResolvedValue(undefined),
+      saveSubscriberWithFilters: jest.fn().mockResolvedValue(null),
       removeSubscriber: jest.fn(),
-      resetSubscriber: jest.fn(),
       getSubscribers: jest.fn(),
     };
 
@@ -48,7 +47,7 @@ describe('SubscriberService', () => {
         keywordFilters,
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(undefined);
+      mockDatabaseService.getSubscriber.mockResolvedValue(null);
 
       const result = await service.subscribe(request);
 
@@ -82,7 +81,7 @@ describe('SubscriberService', () => {
         keywordFilters: newFilters,
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(existingConfig);
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
 
       const result = await service.subscribe(request);
 
@@ -119,7 +118,7 @@ describe('SubscriberService', () => {
         keywordFilters: newFilters,
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(existingConfig);
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
 
       const result = await service.subscribe(request);
 
@@ -146,7 +145,7 @@ describe('SubscriberService', () => {
         keywordFilters: newFilters,
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(existingConfig);
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
 
       const result = await service.subscribe(request);
 
@@ -163,7 +162,7 @@ describe('SubscriberService', () => {
         keywordFilters: [{ keyword: '劍', messageTypes: ['buy'] }],
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(existingConfig);
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
 
       const result = await service.unsubscribe('user1');
 
@@ -174,7 +173,7 @@ describe('SubscriberService', () => {
     });
 
     it('should return false when user is not subscribed', async () => {
-      mockDatabaseService.getSubscriber.mockReturnValue(undefined);
+      mockDatabaseService.getSubscriber.mockResolvedValue(null);
 
       const result = await service.unsubscribe('user1');
 
@@ -183,74 +182,210 @@ describe('SubscriberService', () => {
     });
   });
 
-  describe('reset', () => {
-    it('should reset existing user subscription', async () => {
-      const existingConfig = {
-        channelId: 'channel1',
-        keywordFilters: [{ keyword: '劍', messageTypes: ['buy'] }],
-      };
-
-      mockDatabaseService.getSubscriber.mockReturnValue(existingConfig);
-
-      const result = await service.reset('user1');
-
-      expect(mockDatabaseService.resetSubscriber).toHaveBeenCalledWith('user1');
-      expect(result).toBe(true);
-    });
-
-    it('should return false when user is not subscribed', async () => {
-      mockDatabaseService.getSubscriber.mockReturnValue(undefined);
-
-      const result = await service.reset('user1');
-
-      expect(mockDatabaseService.resetSubscriber).not.toHaveBeenCalled();
-      expect(result).toBe(false);
-    });
-  });
-
   describe('getSubscription', () => {
-    it('should return subscription config when user exists', () => {
+    it('should return subscription config when user exists', async () => {
       const config = {
         channelId: 'channel1',
         keywordFilters: [{ keyword: '劍', messageTypes: ['buy'] }],
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(config);
+      mockDatabaseService.getSubscriber.mockResolvedValue(config);
 
-      const result = service.getSubscription('user1');
+      const result = await service.getSubscription('user1');
 
       expect(result).toEqual(config);
     });
 
-    it('should return null when user does not exist', () => {
-      mockDatabaseService.getSubscriber.mockReturnValue(undefined);
+    it('should return null when user does not exist', async () => {
+      mockDatabaseService.getSubscriber.mockResolvedValue(null);
 
-      const result = service.getSubscription('user1');
+      const result = await service.getSubscription('user1');
 
       expect(result).toBeNull();
     });
   });
 
   describe('isSubscribed', () => {
-    it('should return true when user is subscribed', () => {
+    it('should return true when user is subscribed', async () => {
       const config = {
         channelId: 'channel1',
         keywordFilters: [{ keyword: '劍', messageTypes: ['buy'] }],
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(config);
+      mockDatabaseService.getSubscriber.mockResolvedValue(config);
 
-      const result = service.isSubscribed('user1');
+      const result = await service.isSubscribed('user1');
 
       expect(result).toBe(true);
     });
 
-    it('should return false when user is not subscribed', () => {
-      mockDatabaseService.getSubscriber.mockReturnValue(undefined);
+    it('should return false when user is not subscribed', async () => {
+      mockDatabaseService.getSubscriber.mockResolvedValue(null);
 
-      const result = service.isSubscribed('user1');
+      const result = await service.isSubscribed('user1');
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('partialUnsubscribe', () => {
+    it('should remove specific keywords completely when no message types specified', async () => {
+      const existingConfig = {
+        channelId: 'channel1',
+        keywordFilters: [
+          { keyword: '劍', messageTypes: ['buy', 'sell'] },
+          { keyword: '盾', messageTypes: ['buy'] },
+          { keyword: '斧', messageTypes: ['sell'] },
+        ],
+      };
+
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
+      mockDatabaseService.saveSubscriberWithFilters.mockResolvedValue(
+        undefined,
+      );
+
+      const result = await service.partialUnsubscribe(
+        'user1',
+        ['盾'],
+        [], // 沒有指定訊息類型，應該完全移除關鍵字
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.remainingCount).toBe(2);
+
+      expect(
+        mockDatabaseService.saveSubscriberWithFilters,
+      ).toHaveBeenCalledWith(
+        'user1',
+        'channel1',
+        [
+          { keyword: '劍', messageTypes: ['buy', 'sell'] },
+          { keyword: '斧', messageTypes: ['sell'] },
+        ],
+        false,
+      );
+    });
+
+    it('should remove specific message types from keywords', async () => {
+      const existingConfig = {
+        channelId: 'channel1',
+        keywordFilters: [
+          { keyword: '劍', messageTypes: ['buy', 'sell'] },
+          { keyword: '盾', messageTypes: ['buy', 'sell'] },
+        ],
+      };
+
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
+      mockDatabaseService.saveSubscriberWithFilters.mockResolvedValue(
+        undefined,
+      );
+
+      const result = await service.partialUnsubscribe('user1', ['劍'], ['buy']);
+
+      expect(result.success).toBe(true);
+      expect(result.remainingCount).toBe(2);
+
+      expect(
+        mockDatabaseService.saveSubscriberWithFilters,
+      ).toHaveBeenCalledWith(
+        'user1',
+        'channel1',
+        [
+          { keyword: '劍', messageTypes: ['sell'] },
+          { keyword: '盾', messageTypes: ['buy', 'sell'] },
+        ],
+        false,
+      );
+    });
+
+    it('should remove message types from all keywords when no keywords specified', async () => {
+      const existingConfig = {
+        channelId: 'channel1',
+        keywordFilters: [
+          { keyword: '劍', messageTypes: ['buy', 'sell'] },
+          { keyword: '盾', messageTypes: ['buy', 'sell'] },
+        ],
+      };
+
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
+      mockDatabaseService.saveSubscriberWithFilters.mockResolvedValue(
+        undefined,
+      );
+
+      const result = await service.partialUnsubscribe('user1', [], ['buy']);
+
+      expect(result.success).toBe(true);
+      expect(result.remainingCount).toBe(2);
+
+      expect(
+        mockDatabaseService.saveSubscriberWithFilters,
+      ).toHaveBeenCalledWith(
+        'user1',
+        'channel1',
+        [
+          { keyword: '劍', messageTypes: ['sell'] },
+          { keyword: '盾', messageTypes: ['sell'] },
+        ],
+        false,
+      );
+    });
+
+    it('should completely unsubscribe when all filters are removed', async () => {
+      const existingConfig = {
+        channelId: 'channel1',
+        keywordFilters: [{ keyword: '劍', messageTypes: ['buy'] }],
+      };
+
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
+      mockDatabaseService.removeSubscriber.mockResolvedValue();
+
+      const result = await service.partialUnsubscribe('user1', ['劍'], ['buy']);
+
+      expect(result.success).toBe(true);
+      expect(result.remainingCount).toBe(0);
+      expect(mockDatabaseService.removeSubscriber).toHaveBeenCalledWith(
+        'user1',
+      );
+      expect(
+        mockDatabaseService.saveSubscriberWithFilters,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('should return false when user is not subscribed', async () => {
+      mockDatabaseService.getSubscriber.mockResolvedValue(null);
+
+      const result = await service.partialUnsubscribe('user1', ['劍'], ['buy']);
+
+      expect(result.success).toBe(false);
+      expect(result.remainingCount).toBe(0);
+    });
+
+    it('should return false when no matching subscriptions found', async () => {
+      const existingConfig = {
+        channelId: 'channel1',
+        keywordFilters: [{ keyword: '劍', messageTypes: ['sell'] }],
+      };
+
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
+
+      const result = await service.partialUnsubscribe('user1', ['盾'], ['buy']);
+
+      expect(result.success).toBe(false);
+      expect(result.remainingCount).toBe(1);
+    });
+
+    it('should return false when no keywords and no message types specified', async () => {
+      const existingConfig = {
+        channelId: 'channel1',
+        keywordFilters: [{ keyword: '劍', messageTypes: ['sell'] }],
+      };
+
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
+
+      const result = await service.partialUnsubscribe('user1', [], []);
+
+      expect(result.success).toBe(false);
+      expect(result.remainingCount).toBe(1);
     });
   });
 
@@ -326,7 +461,7 @@ describe('SubscriberService', () => {
         keywordFilters: [{ keyword: '劍', messageTypes: ['sell'] }],
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(existingConfig);
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
 
       const result = await service.subscribe(request);
 
@@ -347,7 +482,7 @@ describe('SubscriberService', () => {
         keywordFilters: [],
       };
 
-      mockDatabaseService.getSubscriber.mockReturnValue(existingConfig);
+      mockDatabaseService.getSubscriber.mockResolvedValue(existingConfig);
 
       const result = await service.subscribe(request);
 

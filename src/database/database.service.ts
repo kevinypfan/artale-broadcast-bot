@@ -15,45 +15,17 @@ export interface SubscriberConfig {
 @Injectable()
 export class DatabaseService {
   private readonly logger = new Logger(DatabaseService.name);
-  private subscribers = new Map<string, SubscriberConfig>();
 
   constructor(
     @InjectModel(Subscriber.name)
     private subscriberModel: Model<SubscriberDocument>,
-  ) {
-    void this.loadSubscribers();
-  }
-
-  async loadSubscribers(): Promise<void> {
-    try {
-      const subscribers = await this.subscriberModel.find().exec();
-      subscribers.forEach((subscriber) => {
-        this.subscribers.set(subscriber.userId, {
-          channelId: subscriber.channelId,
-          keywordFilters: subscriber.keywordFilters || [],
-        });
-      });
-      this.logger.log(`Loaded ${subscribers.length} subscribers from database`);
-    } catch (error) {
-      this.logger.error('Error loading subscribers:', error);
-    }
-  }
+  ) {}
 
   async removeSubscriber(userId: string): Promise<void> {
     try {
       await this.subscriberModel.deleteOne({ userId }).exec();
-      this.subscribers.delete(userId);
     } catch (error) {
       this.logger.error('Error removing subscriber:', error);
-    }
-  }
-
-  async resetSubscriber(userId: string): Promise<void> {
-    try {
-      await this.subscriberModel.deleteOne({ userId }).exec();
-      this.subscribers.delete(userId);
-    } catch (error) {
-      this.logger.error('Error resetting subscriber:', error);
     }
   }
 
@@ -83,30 +55,42 @@ export class DatabaseService {
         },
         { upsert: true, new: true },
       );
-
-      this.subscribers.set(userId, {
-        channelId,
-        keywordFilters: finalKeywordFilters,
-      });
     } catch (error) {
       this.logger.error('Error saving subscriber with filters:', error);
     }
   }
 
-  getSubscriber(userId: string): SubscriberConfig | undefined {
-    return this.subscribers.get(userId);
-  }
-
-  getSubscribers(): Map<string, SubscriberConfig> {
-    return this.subscribers;
-  }
-
-  async getSubscriberFromDb(userId: string): Promise<Subscriber | null> {
+  async getSubscriber(userId: string): Promise<SubscriberConfig | null> {
     try {
-      return await this.subscriberModel.findOne({ userId }).exec();
+      const subscriber = await this.subscriberModel.findOne({ userId }).exec();
+      if (!subscriber) return null;
+
+      return {
+        channelId: subscriber.channelId,
+        keywordFilters: subscriber.keywordFilters || [],
+      };
     } catch (error) {
-      this.logger.error('Error getting subscriber from database:', error);
+      this.logger.error('Error getting subscriber:', error);
       return null;
+    }
+  }
+
+  async getAllSubscribers(): Promise<Map<string, SubscriberConfig>> {
+    try {
+      const subscribers = await this.subscriberModel.find().exec();
+      const subscribersMap = new Map<string, SubscriberConfig>();
+
+      subscribers.forEach((subscriber) => {
+        subscribersMap.set(subscriber.userId, {
+          channelId: subscriber.channelId,
+          keywordFilters: subscriber.keywordFilters || [],
+        });
+      });
+
+      return subscribersMap;
+    } catch (error) {
+      this.logger.error('Error getting all subscribers:', error);
+      return new Map();
     }
   }
 }

@@ -147,7 +147,7 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
     const messageType = payload.message_type === 'buy' ? '🛒 收購' : '💰 販售';
     const player = `${payload.player_name}#${payload.player_id}`;
 
-    const subscribers = this.databaseService.getSubscribers();
+    const subscribers = await this.databaseService.getAllSubscribers();
     const client = this.discordService.getClient();
 
     // 按 Discord 頻道分組符合條件的用戶，並記錄訂閱原因

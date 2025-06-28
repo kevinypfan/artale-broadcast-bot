@@ -1,10 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import {
-  SlashCommandBuilder,
-  EmbedBuilder,
-  ChatInputCommandInteraction,
-} from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
 import { SubscriberService } from '../subscriber/subscriber.service';
+import { KeywordFilter } from '../schemas/subscriber.schema';
+
+interface UnsubscribeResult {
+  success: boolean;
+  remainingCount: number;
+  removedItems: string[];
+  remainingFilters: KeywordFilter[];
+}
 
 @Injectable()
 export class CommandService {
@@ -34,19 +38,27 @@ export class CommandService {
         ),
       new SlashCommandBuilder()
         .setName('unsubscribe')
-        .setDescription('取消訂閱 MapleStory Artale 廣播訊息'),
+        .setDescription('取消訂閱 MapleStory Artale 廣播訊息')
+        .addStringOption((option) =>
+          option
+            .setName('keywords')
+            .setDescription('要取消的關鍵字 (用逗號分隔，留空表示取消所有)')
+            .setRequired(false),
+        )
+        .addStringOption((option) =>
+          option
+            .setName('types')
+            .setDescription('要取消的訊息類型')
+            .setRequired(false)
+            .addChoices(
+              { name: '收購', value: 'buy' },
+              { name: '販售', value: 'sell' },
+              { name: '全部', value: 'both' },
+            ),
+        ),
       new SlashCommandBuilder()
         .setName('status')
         .setDescription('查看訂閱狀態'),
-      new SlashCommandBuilder()
-        .setName('reset')
-        .setDescription('重置所有訂閱設定'),
-      new SlashCommandBuilder()
-        .setName('listkeywords')
-        .setDescription('查看所有關鍵字'),
-      new SlashCommandBuilder()
-        .setName('listtypes')
-        .setDescription('查看訊息類型清單'),
     ];
   }
 
@@ -57,30 +69,40 @@ export class CommandService {
 
     const { commandName } = interaction;
 
-    switch (commandName) {
-      case 'subscribe':
-        await this.handleSubscribe(interaction);
-        break;
+    // 記錄所有指令和用戶資訊
+    console.log(`📱 Command: /${commandName}`);
+    console.log(`👤 User ID: ${interaction.user.id}`);
+    console.log(`👤 Username: ${interaction.user.username}`);
+    console.log(`📍 Channel ID: ${interaction.channelId}`);
 
-      case 'unsubscribe':
-        await this.handleUnsubscribe(interaction);
-        break;
+    try {
+      switch (commandName) {
+        case 'subscribe':
+          await this.handleSubscribe(interaction);
+          break;
 
-      case 'status':
-        await this.handleStatus(interaction);
-        break;
+        case 'unsubscribe':
+          await this.handleUnsubscribe(interaction);
+          break;
 
-      case 'reset':
-        await this.handleReset(interaction);
-        break;
-
-      case 'listkeywords':
-        await this.handleListKeywords(interaction);
-        break;
-
-      case 'listtypes':
-        await this.handleListTypes(interaction);
-        break;
+        case 'status':
+          await this.handleStatus(interaction);
+          break;
+      }
+    } catch (error) {
+      // 處理互動過期或其他錯誤
+      if (!interaction.replied && !interaction.deferred) {
+        try {
+          await interaction.reply({
+            content: '❌ 指令執行時發生錯誤，請稍後再試',
+            ephemeral: true,
+          });
+        } catch (replyError) {
+          // 如果回覆也失敗，記錄錯誤但不拋出
+          console.error('Failed to reply to interaction:', replyError);
+        }
+      }
+      console.error('Command execution error:', error);
     }
   }
 
@@ -109,7 +131,7 @@ export class CommandService {
     }
 
     // 使用 SubscriberService 處理訂閱
-    const wasSubscribed = this.subscriberService.isSubscribed(
+    const wasSubscribed = await this.subscriberService.isSubscribed(
       interaction.user.id,
     );
 
@@ -147,27 +169,89 @@ export class CommandService {
   private async handleUnsubscribe(
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
-    const success = await this.subscriberService.unsubscribe(
-      interaction.user.id,
-    );
-    if (success) {
-      await interaction.reply('❌ 已取消訂閱 MapleStory Artale 廣播訊息');
+    const keywordsInput = interaction.options.getString('keywords');
+    const typesInput = interaction.options.getString('types');
+
+    // 如果沒有提供任何參數，取消所有訂閱
+    if (!keywordsInput && !typesInput) {
+      const success = await this.subscriberService.unsubscribe(
+        interaction.user.id,
+      );
+      if (success) {
+        await interaction.reply('❌ 已取消訂閱 MapleStory Artale 廣播訊息');
+      } else {
+        await interaction.reply('❓ 您尚未訂閱任何廣播訊息');
+      }
+      return;
+    }
+
+    // 處理部分取消訂閱
+    const keywords = keywordsInput
+      ? keywordsInput
+          .split(',')
+          .map((k) => k.trim())
+          .filter((k) => k.length > 0)
+      : [];
+
+    let messageTypes: string[] = [];
+    if (typesInput === 'buy') {
+      messageTypes = ['buy'];
+    } else if (typesInput === 'sell') {
+      messageTypes = ['sell'];
+    } else if (typesInput === 'both') {
+      messageTypes = ['buy', 'sell'];
+    }
+    // 如果沒有指定 types，messageTypes 保持空陣列
+
+    const result: UnsubscribeResult =
+      await this.subscriberService.partialUnsubscribe(
+        interaction.user.id,
+        keywords,
+        messageTypes,
+      );
+
+    if (result.success) {
+      const removedItems = result.removedItems || [];
+      let message = `✅ 已成功取消訂閱：${removedItems.join(', ')}`;
+
+      if (result.remainingCount === 0) {
+        message += '\n🔴 已完全取消所有訂閱';
+      } else {
+        // 顯示剩餘的過濾器
+        const remainingFilters = result.remainingFilters || [];
+        const remainingDescriptions = remainingFilters.map((filter) => {
+          const typeNames = filter.messageTypes.map((t) =>
+            t === 'buy' ? '收購' : '販售',
+          );
+          return `${filter.keyword} (${typeNames.join(', ')})`;
+        });
+        message += `\n\n📋 剩餘訂閱：\n🔍 ${remainingDescriptions.join('\n🔍 ')}`;
+      }
+
+      await interaction.reply(message);
     } else {
-      await interaction.reply('❓ 您尚未訂閱任何廣播訊息');
+      await interaction.reply('❓ 沒有找到匹配的訂閱內容可以取消');
     }
   }
 
   private async handleStatus(
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
-    const userConfig = this.subscriberService.getSubscription(
-      interaction.user.id,
-    );
-    const isSubscribed = !!userConfig;
+    // 🚨 立即 defer，避免 WebSocket 事件阻塞導致超時
+    await interaction.deferReply({ ephemeral: true });
 
-    let description = isSubscribed ? '✅ 已訂閱' : '❌ 未訂閱';
-    if (isSubscribed) {
-      if (userConfig.keywordFilters && userConfig.keywordFilters.length > 0) {
+    console.log('=== STATUS COMMAND START ===');
+    console.log('User ID:', interaction.user.id);
+
+    try {
+      const userConfig = await this.subscriberService.getSubscription(
+        interaction.user.id,
+      );
+      const isSubscribed = !!userConfig;
+
+      let description = isSubscribed ? '✅ 已訂閱' : '❌ 未訂閱';
+      if (isSubscribed && userConfig?.keywordFilters?.length) {
+        console.log('User subscription config:', userConfig);
         const filterDescriptions = userConfig.keywordFilters.map((filter) => {
           const typeNames = filter.messageTypes.map((t) =>
             t === 'buy' ? '收購' : '販售',
@@ -175,99 +259,20 @@ export class CommandService {
           return `${filter.keyword} (${typeNames.join(', ')})`;
         });
         description += `\n🔍 關鍵字過濾器: ${filterDescriptions.join(', ')}`;
-      } else {
-        description += '\n📢 接收所有訊息';
+        console.log('Filter descriptions:', filterDescriptions);
+      }
+
+      await interaction.editReply({ content: description });
+      console.log('Reply sent successfully');
+    } catch (error) {
+      console.error('Error in handleStatus:', error);
+      try {
+        await interaction.editReply({ content: '❌ 查詢狀態時發生錯誤' });
+      } catch (editError) {
+        console.error('Failed to edit reply:', editError);
       }
     }
 
-    const statusEmbed = new EmbedBuilder()
-      .setTitle('訂閱狀態')
-      .setDescription(description)
-      .setColor(isSubscribed ? 0x00ae86 : 0xff0000);
-    await interaction.reply({ embeds: [statusEmbed] });
-  }
-
-  private async handleReset(
-    interaction: ChatInputCommandInteraction,
-  ): Promise<void> {
-    const success = await this.subscriberService.reset(interaction.user.id);
-    if (success) {
-      await interaction.reply('🔄 已重置所有訂閱設定');
-    } else {
-      await interaction.reply('❓ 您尚未訂閱任何廣播訊息');
-    }
-  }
-
-  private async handleListKeywords(
-    interaction: ChatInputCommandInteraction,
-  ): Promise<void> {
-    const userConfig = this.subscriberService.getSubscription(
-      interaction.user.id,
-    );
-
-    if (!userConfig) {
-      await interaction.reply('❓ 請先使用 /subscribe 訂閱廣播訊息');
-      return;
-    }
-
-    let keywordsList: string;
-    if (userConfig.keywordFilters && userConfig.keywordFilters.length > 0) {
-      const filterDescriptions = userConfig.keywordFilters.map((filter) => {
-        const typeNames = filter.messageTypes.map((t) =>
-          t === 'buy' ? '收購' : '販售',
-        );
-        return `${filter.keyword} (${typeNames.join(', ')})`;
-      });
-      keywordsList = filterDescriptions.join('\n• ');
-    } else {
-      keywordsList = '無 (接收所有訊息)';
-    }
-
-    const listEmbed = new EmbedBuilder()
-      .setTitle('🔍 關鍵字清單')
-      .setDescription(
-        keywordsList !== '無 (接收所有訊息)'
-          ? `• ${keywordsList}`
-          : keywordsList,
-      )
-      .setColor(0x3498db);
-    await interaction.reply({ embeds: [listEmbed] });
-  }
-
-  private async handleListTypes(
-    interaction: ChatInputCommandInteraction,
-  ): Promise<void> {
-    const userConfig = this.subscriberService.getSubscription(
-      interaction.user.id,
-    );
-
-    if (!userConfig) {
-      await interaction.reply('❓ 請先使用 /subscribe 訂閱廣播訊息');
-      return;
-    }
-
-    let typesDescription: string;
-
-    if (userConfig.keywordFilters && userConfig.keywordFilters.length > 0) {
-      // 顯示每個關鍵字的訊息類型
-      const filterDescriptions = userConfig.keywordFilters.map((filter) => {
-        const typeNames = filter.messageTypes.map((t) =>
-          t === 'buy' ? '收購' : '販售',
-        );
-        return `${filter.keyword}: ${typeNames.join(', ')}`;
-      });
-      typesDescription =
-        filterDescriptions.length > 0
-          ? `• ${filterDescriptions.join('\n• ')}`
-          : '無';
-    } else {
-      typesDescription = '無';
-    }
-
-    const typesEmbed = new EmbedBuilder()
-      .setTitle('📋 訊息類型清單')
-      .setDescription(typesDescription)
-      .setColor(0x9b59b6);
-    await interaction.reply({ embeds: [typesEmbed] });
+    console.log('=== STATUS COMMAND END ===');
   }
 }
