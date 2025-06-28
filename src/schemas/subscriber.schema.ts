@@ -16,7 +16,7 @@ export class Subscriber {
   @Prop({ required: true })
   channelId: string;
 
-  // 新的關鍵字過濾結構
+  // 關鍵字過濾結構
   @Prop({
     type: [
       {
@@ -27,13 +27,6 @@ export class Subscriber {
     default: [],
   })
   keywordFilters: KeywordFilter[];
-
-  // 保留舊欄位用於向後兼容
-  @Prop({ type: [String], default: [] })
-  keywords: string[];
-
-  @Prop({ type: [String], default: ['buy', 'sell'] })
-  messageTypes: string[];
 
   @Prop({ default: Date.now })
   createdAt: Date;

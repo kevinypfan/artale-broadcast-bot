@@ -113,12 +113,16 @@ export class CommandService {
       interaction.user.id,
     );
 
-    // 為了向後兼容，使用 legacy 方法
-    const finalConfig = await this.subscriberService.subscribeLegacy({
+    // 轉換為新的 KeywordFilter 格式
+    const keywordFilters = keywords.map((keyword) => ({
+      keyword,
+      messageTypes,
+    }));
+
+    const finalConfig = await this.subscriberService.subscribe({
       userId: interaction.user.id,
       channelId: interaction.channel.id,
-      keywords,
-      messageTypes,
+      keywordFilters,
     });
 
     // 生成回覆訊息
@@ -171,13 +175,6 @@ export class CommandService {
           return `${filter.keyword} (${typeNames.join(', ')})`;
         });
         description += `\n🔍 關鍵字過濾器: ${filterDescriptions.join(', ')}`;
-      } else if (userConfig.keywords && userConfig.keywords.length > 0) {
-        // 向後兼容舊格式
-        description += `\n🔍 關鍵字: ${userConfig.keywords.join(', ')}`;
-        const typeNames = userConfig.messageTypes!.map((t) =>
-          t === 'buy' ? '收購' : '販售',
-        );
-        description += `\n📋 類型: ${typeNames.join(', ')}`;
       } else {
         description += '\n📢 接收所有訊息';
       }
@@ -222,9 +219,6 @@ export class CommandService {
         return `${filter.keyword} (${typeNames.join(', ')})`;
       });
       keywordsList = filterDescriptions.join('\n• ');
-    } else if (userConfig.keywords && userConfig.keywords.length > 0) {
-      // 向後兼容舊格式
-      keywordsList = userConfig.keywords.join('\n• ');
     } else {
       keywordsList = '無 (接收所有訊息)';
     }
@@ -255,7 +249,7 @@ export class CommandService {
     let typesDescription: string;
 
     if (userConfig.keywordFilters && userConfig.keywordFilters.length > 0) {
-      // 新格式：顯示每個關鍵字的訊息類型
+      // 顯示每個關鍵字的訊息類型
       const filterDescriptions = userConfig.keywordFilters.map((filter) => {
         const typeNames = filter.messageTypes.map((t) =>
           t === 'buy' ? '收購' : '販售',
@@ -266,13 +260,6 @@ export class CommandService {
         filterDescriptions.length > 0
           ? `• ${filterDescriptions.join('\n• ')}`
           : '無';
-    } else if (userConfig.messageTypes && userConfig.messageTypes.length > 0) {
-      // 向後兼容舊格式
-      const listTypeNames = userConfig.messageTypes.map((t) =>
-        t === 'buy' ? '收購' : '販售',
-      );
-      typesDescription =
-        listTypeNames.length > 0 ? `• ${listTypeNames.join('\n• ')}` : '無';
     } else {
       typesDescription = '無';
     }

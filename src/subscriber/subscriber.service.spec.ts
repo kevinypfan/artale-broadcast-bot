@@ -11,7 +11,6 @@ describe('SubscriberService', () => {
   beforeEach(async () => {
     const mockDatabase = {
       getSubscriber: jest.fn(),
-      saveSubscriber: jest.fn(),
       saveSubscriberWithFilters: jest.fn().mockResolvedValue(undefined),
       removeSubscriber: jest.fn(),
       resetSubscriber: jest.fn(),
@@ -252,33 +251,6 @@ describe('SubscriberService', () => {
       const result = service.isSubscribed('user1');
 
       expect(result).toBe(false);
-    });
-  });
-
-  describe('subscribeLegacy', () => {
-    it('should convert legacy format to new format', async () => {
-      const legacyRequest = {
-        userId: 'user1',
-        channelId: 'channel1',
-        keywords: ['劍', '盾'],
-        messageTypes: ['buy', 'sell'],
-      };
-
-      mockDatabaseService.getSubscriber.mockReturnValue(undefined);
-
-      await service.subscribeLegacy(legacyRequest);
-
-      expect(
-        mockDatabaseService.saveSubscriberWithFilters,
-      ).toHaveBeenCalledWith(
-        'user1',
-        'channel1',
-        [
-          { keyword: '劍', messageTypes: ['buy', 'sell'] },
-          { keyword: '盾', messageTypes: ['buy', 'sell'] },
-        ],
-        false,
-      );
     });
   });
 

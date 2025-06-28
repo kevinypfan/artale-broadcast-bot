@@ -8,20 +8,9 @@ export interface SubscriptionRequest {
   keywordFilters: KeywordFilter[];
 }
 
-// 向後兼容的請求格式
-export interface LegacySubscriptionRequest {
-  userId: string;
-  channelId: string;
-  keywords: string[];
-  messageTypes: string[];
-}
-
 export interface SubscriberConfig {
   channelId: string;
   keywordFilters: KeywordFilter[];
-  // 保留舊格式用於向後兼容
-  keywords?: string[];
-  messageTypes?: string[];
 }
 
 @Injectable()
@@ -97,23 +86,6 @@ export class SubscriberService {
     return true;
   }
 
-  // 向後兼容的訂閱方法
-  async subscribeLegacy(
-    request: LegacySubscriptionRequest,
-  ): Promise<SubscriberConfig> {
-    // 轉換為新格式
-    const keywordFilters: KeywordFilter[] = request.keywords.map((keyword) => ({
-      keyword,
-      messageTypes: request.messageTypes,
-    }));
-
-    return this.subscribe({
-      userId: request.userId,
-      channelId: request.channelId,
-      keywordFilters,
-    });
-  }
-
   getSubscription(userId: string): SubscriberConfig | null {
     return this.databaseService.getSubscriber(userId) || null;
   }
@@ -124,23 +96,6 @@ export class SubscriberService {
 
   getAllSubscriptions(): Map<string, SubscriberConfig> {
     return this.databaseService.getSubscribers();
-  }
-
-  private mergeKeywords(existing: string[], newKeywords: string[]): string[] {
-    const merged = [...existing, ...newKeywords];
-    // 去重並轉為小寫比較，保持原始大小寫
-    const unique = merged.filter(
-      (keyword, index, array) =>
-        array.findIndex((k) => k.toLowerCase() === keyword.toLowerCase()) ===
-        index,
-    );
-    return unique;
-  }
-
-  private mergeMessageTypes(existing: string[], newTypes: string[]): string[] {
-    const merged = [...existing, ...newTypes];
-    // 去重
-    return [...new Set(merged)];
   }
 
   private mergeKeywordFilters(

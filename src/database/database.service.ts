@@ -10,9 +10,6 @@ import {
 export interface SubscriberConfig {
   channelId: string;
   keywordFilters: KeywordFilter[];
-  // 向後兼容
-  keywords?: string[];
-  messageTypes?: string[];
 }
 
 @Injectable()
@@ -34,60 +31,11 @@ export class DatabaseService {
         this.subscribers.set(subscriber.userId, {
           channelId: subscriber.channelId,
           keywordFilters: subscriber.keywordFilters || [],
-          // 向後兼容舊格式
-          keywords: subscriber.keywords,
-          messageTypes: subscriber.messageTypes,
         });
       });
       this.logger.log(`Loaded ${subscribers.length} subscribers from database`);
     } catch (error) {
       this.logger.error('Error loading subscribers:', error);
-    }
-  }
-
-  async saveSubscriber(
-    userId: string,
-    channelId: string,
-    keywords: string[],
-    messageTypes: string[] = ['buy', 'sell'],
-    merge: boolean = false,
-  ): Promise<void> {
-    try {
-      let finalKeywords = keywords;
-      let finalMessageTypes = messageTypes;
-
-      if (merge) {
-        const existing = await this.subscriberModel.findOne({ userId }).exec();
-        if (existing) {
-          // 合并关键字，避免重复
-          const existingKeywords = existing.keywords || [];
-          finalKeywords = [...new Set([...existingKeywords, ...keywords])];
-
-          // 合并消息类型，避免重复
-          const existingTypes = existing.messageTypes || ['buy', 'sell'];
-          finalMessageTypes = [...new Set([...existingTypes, ...messageTypes])];
-        }
-      }
-
-      await this.subscriberModel.findOneAndUpdate(
-        { userId },
-        {
-          channelId,
-          keywords: finalKeywords,
-          messageTypes: finalMessageTypes,
-          updatedAt: new Date(),
-        },
-        { upsert: true, new: true },
-      );
-
-      this.subscribers.set(userId, {
-        channelId,
-        keywordFilters: [],
-        keywords: finalKeywords,
-        messageTypes: finalMessageTypes,
-      });
-    } catch (error) {
-      this.logger.error('Error saving subscriber:', error);
     }
   }
 

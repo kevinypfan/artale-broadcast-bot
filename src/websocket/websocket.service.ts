@@ -160,16 +160,10 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
       try {
         const channelId = userConfig.channelId;
         const keywordFilters = userConfig.keywordFilters;
-        const keywords = userConfig.keywords;
-        const messageTypes = userConfig.messageTypes;
         const matchedReasons: string[] = [];
 
-        // 新的過濾邏輯：每個關鍵字有自己的 messageTypes
-        if (
-          keywordFilters &&
-          Array.isArray(keywordFilters) &&
-          keywordFilters.length > 0
-        ) {
+        // 檢查關鍵字過濾器
+        if (keywordFilters && keywordFilters.length > 0) {
           keywordFilters.forEach((filter: KeywordFilter) => {
             // 檢查訊息類型是否在這個關鍵字的允許清單中
             const messageTypeMatches = filter.messageTypes.includes(
@@ -185,30 +179,6 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
               matchedReasons.push(`${filter.keyword} (${typeText})`);
             }
           });
-        } else if (keywords && messageTypes) {
-          // 向後兼容舊格式
-          const messageTypeMatches = messageTypes.includes(
-            payload.message_type,
-          );
-
-          if (messageTypeMatches) {
-            if (keywords.length === 0) {
-              const typeText = payload.message_type === 'buy' ? '收購' : '販售';
-              matchedReasons.push(`所有訊息 (${typeText})`);
-            } else {
-              const matchedKeywords = keywords.filter((keyword) =>
-                payload.content.toLowerCase().includes(keyword.toLowerCase()),
-              );
-
-              if (matchedKeywords.length > 0) {
-                const typeText =
-                  payload.message_type === 'buy' ? '收購' : '販售';
-                matchedReasons.push(
-                  `${matchedKeywords.join(', ')} (${typeText})`,
-                );
-              }
-            }
-          }
         }
 
         if (matchedReasons.length > 0) {
