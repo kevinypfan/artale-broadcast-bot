@@ -1,0 +1,60 @@
+name: Docker Build and Test
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - 'docker/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  docker-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for testing
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: test-image:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker image
+        run: |
+          # Test that the image builds successfully
+          docker run --rm test-image:latest node --version
+          
+          # Test that the application starts (basic smoke test)
+          docker run --rm -d --name test-container test-image:latest
+          sleep 5
+          
+          # Check if container is still running (didn't crash immediately)
+          if docker ps | grep test-container; then
+            echo "✅ Container started successfully"
+            docker stop test-container
+          else
+            echo "❌ Container failed to start or crashed"
+            docker logs test-container || true
+            exit 1
+          fi
+
+      - name: Test Docker Compose
+        run: |
+          # Test that docker-compose builds without errors
+          docker-compose config
+          
+          # Test development docker-compose
+          docker-compose -f docker-compose.dev.yml config

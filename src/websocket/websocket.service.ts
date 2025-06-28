@@ -1,0 +1,248 @@
+import {
+  Injectable,
+  OnModuleInit,
+  OnModuleDestroy,
+  Logger,
+} from '@nestjs/common';
+import * as WebSocket from 'ws';
+import { EmbedBuilder } from 'discord.js';
+import { DatabaseService } from '../database/database.service';
+import { DiscordService } from '../discord/discord.service';
+import { KeywordFilter } from '../schemas/subscriber.schema';
+
+interface ArtaleMessage {
+  type: string;
+  payload?: {
+    message_type: string;
+    channel: string;
+    player_name: string;
+    player_id: string;
+    content: string;
+  };
+  request_id?: string;
+}
+
+@Injectable()
+export class WebSocketService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(WebSocketService.name);
+  private ws: WebSocket;
+  private pingInterval: NodeJS.Timeout;
+
+  constructor(
+    private readonly databaseService: DatabaseService,
+    private readonly discordService: DiscordService,
+  ) {}
+
+  onModuleInit() {
+    // 等待 Discord 客户端准备就绪后再连接 WebSocket
+    setTimeout(() => {
+      this.connect();
+    }, 5000);
+  }
+
+  onModuleDestroy() {
+    this.disconnect();
+  }
+
+  private connect() {
+    this.ws = new WebSocket('wss://api.artale-love.com/ws/broadcasts');
+
+    this.ws.on('open', () => {
+      this.logger.log('Connected to Artale WebSocket');
+    });
+
+    this.ws.on('message', (data: WebSocket.Data) => {
+      try {
+        let dataString: string;
+        if (Buffer.isBuffer(data)) {
+          dataString = data.toString('utf8');
+        } else if (Array.isArray(data)) {
+          dataString = Buffer.concat(data).toString('utf8');
+        } else {
+          dataString = data as string;
+        }
+        const message: ArtaleMessage = JSON.parse(dataString) as ArtaleMessage;
+        void this.handleMessage(message);
+      } catch (error) {
+        this.logger.error('Failed to parse WebSocket message:', error);
+      }
+    });
+
+    this.ws.on('close', () => {
+      this.logger.warn(
+        'WebSocket connection closed, reconnecting in 5 seconds...',
+      );
+      if (this.pingInterval) {
+        clearInterval(this.pingInterval);
+      }
+      // 重连
+      setTimeout(() => this.connect(), 5000);
+    });
+
+    this.ws.on('error', (error) => {
+      this.logger.error('WebSocket error:', error);
+    });
+  }
+
+  private handleMessage(message: ArtaleMessage) {
+    this.logger.debug(`Received WebSocket message: ${JSON.stringify(message)}`);
+
+    switch (message.type) {
+      case 'connection_info':
+        this.logger.log('Connection established');
+        this.subscribeToNewMessages();
+        break;
+
+      case 'subscription_confirmed':
+        this.logger.log('Subscription confirmed');
+        this.startPingInterval();
+        break;
+
+      case 'pong':
+        this.logger.debug('Received pong');
+        break;
+
+      case 'new_message':
+        if (message.payload) {
+          this.logger.log('Broadcasting new message to Discord');
+          void this.broadcastToDiscord(message.payload);
+        }
+        break;
+
+      default:
+        this.logger.warn(`Unknown message type: ${message.type}`);
+    }
+  }
+
+  private subscribeToNewMessages() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const subscribeMessage = {
+        type: 'subscribe_new',
+        request_id: this.generateRequestId(),
+      };
+      this.ws.send(JSON.stringify(subscribeMessage));
+      this.logger.log('Sent subscription request');
+    }
+  }
+
+  private startPingInterval() {
+    this.pingInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        const pingMessage = {
+          type: 'ping',
+          request_id: this.generateRequestId(),
+        };
+        this.ws.send(JSON.stringify(pingMessage));
+        this.logger.debug('Sent ping');
+      }
+    }, 30000);
+  }
+
+  private async broadcastToDiscord(payload: ArtaleMessage['payload']) {
+    if (!payload) {
+      this.logger.error('Payload is undefined');
+      return;
+    }
+
+    const messageType = payload.message_type === 'buy' ? '🛒 收購' : '💰 販售';
+    const player = `${payload.player_name}#${payload.player_id}`;
+    const embed = new EmbedBuilder()
+      .setTitle(`${messageType} - ${payload.channel}`)
+      .setDescription(`### ${payload.content}`)
+      .addFields({ name: 'Player', value: player, inline: true })
+      .setColor(payload.message_type === 'buy' ? 0x3498db : 0xe74c3c);
+
+    const subscribers = this.databaseService.getSubscribers();
+    const client = this.discordService.getClient();
+
+    // 按 Discord 頻道分組符合條件的用戶
+    const channelToUsers = new Map<string, string[]>();
+
+    for (const [userId, userConfig] of subscribers) {
+      try {
+        const channelId = userConfig.channelId;
+        const keywordFilters = userConfig.keywordFilters;
+        const keywords = userConfig.keywords;
+        const messageTypes = userConfig.messageTypes;
+        let shouldSend = false;
+
+        // 新的過濾邏輯：每個關鍵字有自己的 messageTypes
+        if (
+          keywordFilters &&
+          Array.isArray(keywordFilters) &&
+          keywordFilters.length > 0
+        ) {
+          shouldSend = keywordFilters.some((filter: KeywordFilter) => {
+            // 檢查訊息類型是否在這個關鍵字的允許清單中
+            const messageTypeMatches = filter.messageTypes.includes(
+              payload.message_type,
+            );
+            // 檢查關鍵字是否匹配
+            const keywordMatches = payload.content
+              .toLowerCase()
+              .includes(filter.keyword.toLowerCase());
+            return messageTypeMatches && keywordMatches;
+          });
+        } else if (keywords && messageTypes) {
+          // 向後兼容舊格式
+          const messageTypeMatches = messageTypes.includes(
+            payload.message_type,
+          );
+          const keywordMatches =
+            keywords.length === 0 ||
+            keywords.some((keyword) =>
+              payload.content.toLowerCase().includes(keyword.toLowerCase()),
+            );
+          shouldSend = messageTypeMatches && keywordMatches;
+        }
+
+        if (shouldSend) {
+          if (!channelToUsers.has(channelId)) {
+            channelToUsers.set(channelId, []);
+          }
+          channelToUsers.get(channelId)!.push(userId);
+        }
+      } catch (error) {
+        this.logger.error(`Failed to process subscriber ${userId}:`, error);
+      }
+    }
+
+    // 為每個 Discord 頻道發送一條訊息，包含所有相關用戶的提及
+    for (const [channelId, userIds] of channelToUsers) {
+      try {
+        const channel = await client.channels.fetch(channelId);
+        if (channel && channel.isTextBased() && 'send' in channel) {
+          const mentions = userIds.map((userId) => `<@${userId}>`).join(' ');
+          await channel.send({
+            content: mentions,
+            embeds: [embed],
+          });
+          this.logger.log(
+            `Sent message to channel ${channelId} with ${userIds.length} mentions`,
+          );
+        }
+      } catch (error) {
+        this.logger.error(
+          `Failed to send message to Discord channel ${channelId}:`,
+          error,
+        );
+      }
+    }
+  }
+
+  private generateRequestId(): string {
+    return (
+      Math.random().toString(36).substring(2, 15) +
+      Math.random().toString(36).substring(2, 15)
+    );
+  }
+
+  disconnect() {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+    }
+    if (this.ws) {
+      this.ws.close();
+    }
+  }
+}

@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # MongoDB for development
+  mongodb:
+    image: mongo:7
+    container_name: artale-bot-dev-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: artale-bot
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_dev_data:/data/db
+    networks:
+      - artale-bot-dev-network
+
+  # Artale Discord Bot for development
+  artale-bot-dev:
+    build:
+      context: .
+      target: builder
+    container_name: artale-bot-dev-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=development
+      - TZ=Asia/Taipei
+      - MONGODB_URI=mongodb://admin:password123@mongodb:27017/artale-bot?authSource=admin
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - CLIENT_ID=${CLIENT_ID}
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      - mongodb
+    networks:
+      - artale-bot-dev-network
+    command: npm run start:dev
+
+
+volumes:
+  mongodb_dev_data:
+    driver: local
+
+networks:
+  artale-bot-dev-network:
+    driver: bridge

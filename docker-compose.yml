@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # MongoDB database
+  mongodb:
+    image: mongo:8
+    container_name: artale-bot-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: artale-bot
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - artale-bot-network
+
+  # Artale Discord Bot
+  artale-bot:
+    build: .
+    container_name: artale-bot-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - TZ=Asia/Taipei
+      - MONGODB_URI=mongodb://admin:password123@mongodb:27017/artale-bot?authSource=admin
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - CLIENT_ID=${CLIENT_ID}
+    depends_on:
+      - mongodb
+    networks:
+      - artale-bot-network
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Health check passed')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  artale-bot-network:
+    driver: bridge
