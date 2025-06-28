@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  # MongoDB database
+  mongodb:
+    image: mongo:8
+    container_name: artale-bot-mongodb-prod
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-artale-bot}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - artale-bot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Security: Run with non-root user
+    user: mongodb
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Artale Discord Bot
+  artale-bot:
+    image: ${DOCKER_USERNAME}/artile-discord-bot:${IMAGE_TAG:-latest}
+    container_name: artale-bot-app-prod
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - TZ=${TIMEZONE:-Asia/Taipei}
+      - MONGODB_URI=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD}@mongodb:27017/${MONGO_DATABASE:-artale-bot}?authSource=admin
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - CLIENT_ID=${CLIENT_ID}
+      # Production optimizations
+      - NODE_OPTIONS=--max-old-space-size=512
+    depends_on:
+      mongodb:
+        condition: service_started
+    networks:
+      - artale-bot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    # Security: Run with non-root user
+    user: "1000:1000"
+
+  # Optional: Log aggregation with Loki (uncomment if needed)
+  # loki:
+  #   image: grafana/loki:2.9.0
+  #   container_name: artale-bot-loki
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3100:3100"
+  #   volumes:
+  #     - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+  #     - loki_data:/loki
+  #   networks:
+  #     - artale-bot-network
+  #   command: -config.file=/etc/loki/local-config.yaml
+
+  # Optional: Monitoring with Prometheus (uncomment if needed)
+  # prometheus:
+  #   image: prom/prometheus:v2.45.0
+  #   container_name: artale-bot-prometheus
+  #   restart: unless-stopped
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #     - prometheus_data:/prometheus
+  #   networks:
+  #     - artale-bot-network
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--web.console.libraries=/etc/prometheus/console_libraries'
+  #     - '--web.console.templates=/etc/prometheus/consoles'
+  #     - '--storage.tsdb.retention.time=200h'
+  #     - '--web.enable-lifecycle'
+
+volumes:
+  mongodb_data:
+    driver: local
+    name: artale-bot-mongodb-prod
+  # loki_data:
+  #   driver: local
+  #   name: artale-bot-loki-prod
+  # prometheus_data:
+  #   driver: local
+  #   name: artale-bot-prometheus-prod
+
+networks:
+  artale-bot-network:
+    driver: bridge
+    name: artale-bot-network-prod

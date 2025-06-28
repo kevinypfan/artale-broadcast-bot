@@ -146,17 +146,15 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
 
     const messageType = payload.message_type === 'buy' ? '🛒 收購' : '💰 販售';
     const player = `${payload.player_name}#${payload.player_id}`;
-    const embed = new EmbedBuilder()
-      .setTitle(`${messageType} - ${payload.channel}`)
-      .setDescription(`### ${payload.content}`)
-      .addFields({ name: 'Player', value: player, inline: true })
-      .setColor(payload.message_type === 'buy' ? 0x3498db : 0xe74c3c);
 
     const subscribers = this.databaseService.getSubscribers();
     const client = this.discordService.getClient();
 
-    // 按 Discord 頻道分組符合條件的用戶
-    const channelToUsers = new Map<string, string[]>();
+    // 按 Discord 頻道分組符合條件的用戶，並記錄訂閱原因
+    const channelToUsersWithReasons = new Map<
+      string,
+      Array<{ userId: string; reason: string }>
+    >();
 
     for (const [userId, userConfig] of subscribers) {
       try {
@@ -164,7 +162,7 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
         const keywordFilters = userConfig.keywordFilters;
         const keywords = userConfig.keywords;
         const messageTypes = userConfig.messageTypes;
-        let shouldSend = false;
+        const matchedReasons: string[] = [];
 
         // 新的過濾邏輯：每個關鍵字有自己的 messageTypes
         if (
@@ -172,7 +170,7 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
           Array.isArray(keywordFilters) &&
           keywordFilters.length > 0
         ) {
-          shouldSend = keywordFilters.some((filter: KeywordFilter) => {
+          keywordFilters.forEach((filter: KeywordFilter) => {
             // 檢查訊息類型是否在這個關鍵字的允許清單中
             const messageTypeMatches = filter.messageTypes.includes(
               payload.message_type,
@@ -181,44 +179,76 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
             const keywordMatches = payload.content
               .toLowerCase()
               .includes(filter.keyword.toLowerCase());
-            return messageTypeMatches && keywordMatches;
+
+            if (messageTypeMatches && keywordMatches) {
+              const typeText = payload.message_type === 'buy' ? '收購' : '販售';
+              matchedReasons.push(`${filter.keyword} (${typeText})`);
+            }
           });
         } else if (keywords && messageTypes) {
           // 向後兼容舊格式
           const messageTypeMatches = messageTypes.includes(
             payload.message_type,
           );
-          const keywordMatches =
-            keywords.length === 0 ||
-            keywords.some((keyword) =>
-              payload.content.toLowerCase().includes(keyword.toLowerCase()),
-            );
-          shouldSend = messageTypeMatches && keywordMatches;
+
+          if (messageTypeMatches) {
+            if (keywords.length === 0) {
+              const typeText = payload.message_type === 'buy' ? '收購' : '販售';
+              matchedReasons.push(`所有訊息 (${typeText})`);
+            } else {
+              const matchedKeywords = keywords.filter((keyword) =>
+                payload.content.toLowerCase().includes(keyword.toLowerCase()),
+              );
+
+              if (matchedKeywords.length > 0) {
+                const typeText =
+                  payload.message_type === 'buy' ? '收購' : '販售';
+                matchedReasons.push(
+                  `${matchedKeywords.join(', ')} (${typeText})`,
+                );
+              }
+            }
+          }
         }
 
-        if (shouldSend) {
-          if (!channelToUsers.has(channelId)) {
-            channelToUsers.set(channelId, []);
+        if (matchedReasons.length > 0) {
+          if (!channelToUsersWithReasons.has(channelId)) {
+            channelToUsersWithReasons.set(channelId, []);
           }
-          channelToUsers.get(channelId)!.push(userId);
+          channelToUsersWithReasons.get(channelId)!.push({
+            userId,
+            reason: matchedReasons.join(', '),
+          });
         }
       } catch (error) {
         this.logger.error(`Failed to process subscriber ${userId}:`, error);
       }
     }
 
-    // 為每個 Discord 頻道發送一條訊息，包含所有相關用戶的提及
-    for (const [channelId, userIds] of channelToUsers) {
+    // 為每個 Discord 頻道發送一條訊息，包含所有相關用戶的提及和訂閱原因
+    for (const [channelId, usersWithReasons] of channelToUsersWithReasons) {
       try {
         const channel = await client.channels.fetch(channelId);
         if (channel && channel.isTextBased() && 'send' in channel) {
-          const mentions = userIds.map((userId) => `<@${userId}>`).join(' ');
+          // 將提及和訂閱原因合併在一起
+          const mentionsWithReasons = usersWithReasons
+            .map((user) => `<@${user.userId}> - ${user.reason}`)
+            .join('\n');
+
+          // 建立簡潔的 embed，不包含額外的訂閱原因欄位
+          const embed = new EmbedBuilder()
+            .setTitle(`${messageType} - ${payload.channel}`)
+            .setDescription(`### ${payload.content}`)
+            .addFields({ name: 'Player', value: player, inline: true })
+            .setColor(payload.message_type === 'buy' ? 0x3498db : 0xe74c3c);
+
           await channel.send({
-            content: mentions,
+            content: mentionsWithReasons,
             embeds: [embed],
           });
+
           this.logger.log(
-            `Sent message to channel ${channelId} with ${userIds.length} mentions`,
+            `Sent message to channel ${channelId} with ${usersWithReasons.length} mentions and reasons`,
           );
         }
       } catch (error) {

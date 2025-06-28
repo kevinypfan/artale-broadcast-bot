@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_ROOT_PASSWORD: Twn4Yv7BQ2yqP50e2Ko9
       MONGO_INITDB_DATABASE: artale-bot
     ports:
       - "27017:27017"
@@ -25,7 +25,7 @@ services:
     environment:
       - NODE_ENV=production
       - TZ=Asia/Taipei
-      - MONGODB_URI=mongodb://admin:password123@mongodb:27017/artale-bot?authSource=admin
+      - MONGODB_URI=mongodb://admin:Twn4Yv7BQ2yqP50e2Ko9@mongodb:27017/artale-bot?authSource=admin
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - CLIENT_ID=${CLIENT_ID}
     depends_on:
