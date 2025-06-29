@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
 import { SubscriberService } from '../subscriber/subscriber.service';
 import { KeywordFilter } from '../schemas/subscriber.schema';
@@ -12,7 +12,16 @@ interface UnsubscribeResult {
 
 @Injectable()
 export class CommandService {
+  private readonly logger = new Logger(CommandService.name);
+
   constructor(private readonly subscriberService: SubscriberService) {}
+
+  private extractErrorCode(error: unknown): string | number | undefined {
+    if (error && typeof error === 'object' && 'code' in error) {
+      return (error as { code: string | number }).code;
+    }
+    return undefined;
+  }
 
   createCommands() {
     return [
@@ -22,8 +31,8 @@ export class CommandService {
         .addStringOption((option) =>
           option
             .setName('keywords')
-            .setDescription('關鍵字 (用逗號分隔，留空表示接收所有訊息)')
-            .setRequired(false),
+            .setDescription('關鍵字 (用逗號分隔)')
+            .setRequired(true),
         )
         .addStringOption((option) =>
           option
@@ -69,11 +78,13 @@ export class CommandService {
 
     const { commandName } = interaction;
 
-    // 記錄所有指令和用戶資訊
-    console.log(`📱 Command: /${commandName}`);
-    console.log(`👤 User ID: ${interaction.user.id}`);
-    console.log(`👤 Username: ${interaction.user.username}`);
-    console.log(`📍 Channel ID: ${interaction.channelId}`);
+    // 記錄所有指令和用戶資訊 (僅開發環境)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`📱 Command: /${commandName}`);
+      console.log(`👤 User ID: ${interaction.user.id}`);
+      console.log(`👤 Username: ${interaction.user.username}`);
+      console.log(`📍 Channel ID: ${interaction.channelId}`);
+    }
 
     try {
       switch (commandName) {
@@ -90,6 +101,26 @@ export class CommandService {
           break;
       }
     } catch (error) {
+      const errorDetails = {
+        commandName,
+        userId: interaction.user.id,
+        username: interaction.user.username,
+        channelId: interaction.channelId,
+        guildId: interaction.guildId,
+        errorType: (error as Error)?.constructor?.name,
+        errorMessage: (error as Error)?.message,
+        errorCode: this.extractErrorCode(error),
+        stackTrace:
+          process.env.NODE_ENV !== 'production'
+            ? (error as Error)?.stack
+            : undefined,
+      };
+
+      this.logger.error(
+        `Command execution failed: /${commandName}`,
+        errorDetails,
+      );
+
       // 處理互動過期或其他錯誤
       if (!interaction.replied && !interaction.deferred) {
         try {
@@ -98,11 +129,18 @@ export class CommandService {
             ephemeral: true,
           });
         } catch (replyError) {
-          // 如果回覆也失敗，記錄錯誤但不拋出
-          console.error('Failed to reply to interaction:', replyError);
+          const replyErrorDetails = {
+            originalError: errorDetails,
+            replyErrorType: (replyError as Error)?.constructor?.name,
+            replyErrorMessage: (replyError as Error)?.message,
+            replyErrorCode: this.extractErrorCode(replyError),
+          };
+          this.logger.error(
+            'Failed to reply to interaction after command error',
+            replyErrorDetails,
+          );
         }
       }
-      console.error('Command execution error:', error);
     }
   }
 
@@ -121,6 +159,12 @@ export class CommandService {
           .map((k) => k.trim())
           .filter((k) => k.length > 0)
       : [];
+
+    // 驗證必須提供至少一個關鍵字
+    if (keywords.length === 0) {
+      await interaction.reply('❌ 請提供至少一個關鍵字來訂閱特定內容');
+      return;
+    }
 
     const typesInput = interaction.options.getString('types');
     let messageTypes = ['buy', 'sell'];
@@ -240,8 +284,10 @@ export class CommandService {
     // 🚨 立即 defer，避免 WebSocket 事件阻塞導致超時
     await interaction.deferReply({ ephemeral: true });
 
-    console.log('=== STATUS COMMAND START ===');
-    console.log('User ID:', interaction.user.id);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('=== STATUS COMMAND START ===');
+      console.log('User ID:', interaction.user.id);
+    }
 
     try {
       const userConfig = await this.subscriberService.getSubscription(
@@ -251,7 +297,9 @@ export class CommandService {
 
       let description = isSubscribed ? '✅ 已訂閱' : '❌ 未訂閱';
       if (isSubscribed && userConfig?.keywordFilters?.length) {
-        console.log('User subscription config:', userConfig);
+        if (process.env.NODE_ENV !== 'production') {
+          console.log('User subscription config:', userConfig);
+        }
         const filterDescriptions = userConfig.keywordFilters.map((filter) => {
           const typeNames = filter.messageTypes.map((t) =>
             t === 'buy' ? '收購' : '販售',
@@ -259,20 +307,45 @@ export class CommandService {
           return `${filter.keyword} (${typeNames.join(', ')})`;
         });
         description += `\n🔍 關鍵字過濾器: ${filterDescriptions.join(', ')}`;
-        console.log('Filter descriptions:', filterDescriptions);
+        if (process.env.NODE_ENV !== 'production') {
+          console.log('Filter descriptions:', filterDescriptions);
+        }
       }
 
       await interaction.editReply({ content: description });
-      console.log('Reply sent successfully');
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('Reply sent successfully');
+      }
     } catch (error) {
-      console.error('Error in handleStatus:', error);
+      const errorDetails = {
+        userId: interaction.user.id,
+        errorType: (error as Error)?.constructor?.name,
+        errorMessage: (error as Error)?.message,
+        stackTrace:
+          process.env.NODE_ENV !== 'production'
+            ? (error as Error)?.stack
+            : undefined,
+      };
+
+      this.logger.error('Error in handleStatus command', errorDetails);
+
       try {
         await interaction.editReply({ content: '❌ 查詢狀態時發生錯誤' });
       } catch (editError) {
-        console.error('Failed to edit reply:', editError);
+        const editErrorDetails = {
+          originalError: errorDetails,
+          editErrorType: (editError as Error)?.constructor?.name,
+          editErrorMessage: (editError as Error)?.message,
+        };
+        this.logger.error(
+          'Failed to edit reply in status command',
+          editErrorDetails,
+        );
       }
     }
 
-    console.log('=== STATUS COMMAND END ===');
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('=== STATUS COMMAND END ===');
+    }
   }
 }

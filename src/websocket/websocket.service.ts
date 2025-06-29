@@ -33,6 +33,20 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
     private readonly discordService: DiscordService,
   ) {}
 
+  private extractErrorCode(error: unknown): string | number | undefined {
+    if (error && typeof error === 'object' && 'code' in error) {
+      return (error as { code: string | number }).code;
+    }
+    return undefined;
+  }
+
+  private extractErrorStatus(error: unknown): string | number | undefined {
+    if (error && typeof error === 'object' && 'status' in error) {
+      return (error as { status: string | number }).status;
+    }
+    return undefined;
+  }
+
   onModuleInit() {
     // 等待 Discord 客户端准备就绪后再连接 WebSocket
     setTimeout(() => {
@@ -222,9 +236,26 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
           );
         }
       } catch (error) {
+        const errorDetails = {
+          channelId,
+          messageType: payload.message_type,
+          channel: payload.channel,
+          player: payload.player_name,
+          contentPreview: payload.content?.substring(0, 100),
+          mentionCount: usersWithReasons.length,
+          errorType: (error as Error)?.constructor?.name,
+          errorMessage: (error as Error)?.message,
+          errorCode: this.extractErrorCode(error),
+          httpStatus: this.extractErrorStatus(error),
+          stackTrace:
+            process.env.NODE_ENV !== 'production'
+              ? (error as Error)?.stack
+              : undefined,
+        };
+
         this.logger.error(
-          `Failed to send message to Discord channel ${channelId}:`,
-          error,
+          `Failed to send message to Discord channel ${channelId}`,
+          errorDetails,
         );
       }
     }

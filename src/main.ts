@@ -5,7 +5,12 @@ import 'dotenv/config';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger:
+      process.env.NODE_ENV === 'production'
+        ? ['error', 'warn', 'log', 'fatal']
+        : ['verbose', 'debug', 'log', 'warn', 'error', 'fatal'],
+  });
 
   // 優雅關閉處理
   process.on('SIGINT', () => {
