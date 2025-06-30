@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import * as WebSocket from 'ws';
 import { EmbedBuilder } from 'discord.js';
+import { createHash } from 'crypto';
 import { DatabaseService } from '../database/database.service';
 import { DiscordService } from '../discord/discord.service';
 import { KeywordFilter } from '../schemas/subscriber.schema';
@@ -27,6 +28,12 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WebSocketService.name);
   private ws: WebSocket;
   private pingInterval: NodeJS.Timeout;
+  private processedMessageIds = new Set<string>();
+  private reconnectAttempts = 0;
+  private readonly maxReconnectAttempts = 10;
+  private readonly baseReconnectDelay = 5000; // 5 seconds
+  private readonly maxReconnectDelay = 30000; // 30 seconds
+  private reconnectTimeout: NodeJS.Timeout;
 
   constructor(
     private readonly databaseService: DatabaseService,
@@ -58,11 +65,39 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
     this.disconnect();
   }
 
+  private generateMessageId(payload: ArtaleMessage['payload']): string {
+    if (!payload) return '';
+    const messageData = `${payload.player_id}-${payload.content}-${payload.message_type}-${payload.channel}`;
+    return createHash('md5').update(messageData).digest('hex');
+  }
+
+  private cleanupProcessedMessages() {
+    // Keep only the most recent 1000 processed message IDs
+    if (this.processedMessageIds.size > 1000) {
+      const idsArray = Array.from(this.processedMessageIds);
+      this.processedMessageIds.clear();
+      // Keep the last 500 IDs
+      idsArray.slice(-500).forEach((id) => this.processedMessageIds.add(id));
+    }
+  }
+
+  private calculateReconnectDelay(): number {
+    const delay = Math.min(
+      this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts),
+      this.maxReconnectDelay,
+    );
+    return delay;
+  }
+
   private connect() {
     this.ws = new WebSocket('wss://api.artale-love.com/ws/broadcasts');
 
     this.ws.on('open', () => {
-      this.logger.log('Connected to Artale WebSocket');
+      this.logger.log(
+        `Connected to Artale WebSocket${this.reconnectAttempts > 0 ? ` (reconnected after ${this.reconnectAttempts} attempts)` : ''}`,
+      );
+      // Reset reconnect attempts on successful connection
+      this.reconnectAttempts = 0;
     });
 
     this.ws.on('message', (data: WebSocket.Data) => {
@@ -82,15 +117,27 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
       }
     });
 
-    this.ws.on('close', () => {
-      this.logger.warn(
-        'WebSocket connection closed, reconnecting in 5 seconds...',
-      );
+    this.ws.on('close', (code, reason) => {
       if (this.pingInterval) {
         clearInterval(this.pingInterval);
       }
-      // 重连
-      setTimeout(() => this.connect(), 5000);
+
+      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        const delay = this.calculateReconnectDelay();
+        this.logger.warn(
+          `WebSocket connection closed (code: ${code}, reason: ${reason?.toString() || 'unknown'}). ` +
+            `Reconnecting in ${delay / 1000}s... (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`,
+        );
+
+        this.reconnectTimeout = setTimeout(() => {
+          this.reconnectAttempts++;
+          this.connect();
+        }, delay);
+      } else {
+        this.logger.error(
+          `WebSocket connection failed after ${this.maxReconnectAttempts} attempts. Giving up.`,
+        );
+      }
     });
 
     this.ws.on('error', (error) => {
@@ -118,7 +165,21 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
 
       case 'new_message':
         if (message.payload) {
-          this.logger.log('Broadcasting new message to Discord');
+          const messageId = this.generateMessageId(message.payload);
+
+          if (this.processedMessageIds.has(messageId)) {
+            this.logger.debug(
+              `Duplicate message detected, skipping: ${messageId}`,
+            );
+            return;
+          }
+
+          this.processedMessageIds.add(messageId);
+          this.cleanupProcessedMessages();
+
+          this.logger.log(
+            `Broadcasting new message to Discord (ID: ${messageId})`,
+          );
           void this.broadcastToDiscord(message.payload);
         }
         break;
@@ -269,6 +330,9 @@ export class WebSocketService implements OnModuleInit, OnModuleDestroy {
   }
 
   disconnect() {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+    }
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
     }
